@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+<refactoring comment="Rename resource &apos;Final_Project_Control_ECU/pic.h&apos; to &apos;pir.h&apos;" description="Rename resource &apos;pic.h&apos;" flags="7" id="org.eclipse.ltk.core.refactoring.rename.resource" input="pic.h" name="pir.h" stamp="1729876981177" updateReferences="true"/>
+</session>

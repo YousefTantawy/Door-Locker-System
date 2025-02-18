@@ -1,0 +1,322 @@
+/*------------------------------------------------------------------------------
+ *  Module      : Application Driver
+ *  File        : main.c
+ *  Description : Source file for the Application code
+ *  Author      : Yousef Tantawy
+ *----------------------------------------------------------------------------*/
+
+#include "buzzer.h"
+#include "std_types.h"
+#include "common_macros.h"
+#include "external_eeprom.h"
+#include "gpio.h"
+#include "motor.h"
+#include "pir.h"
+#include "pwm.h"
+#include "timer.h"
+#include "twi.h"
+#include "uart.h"
+#include "avr/io.h"
+#include "util/delay.h"
+#include "lcd.h"
+
+/*------------------------------------------------------------------------------
+ *  				Pre-Processor Constants and Configurations
+ *----------------------------------------------------------------------------*/
+
+#define READY 0x01
+#define REPEAT 0x02
+#define NO_REPEAT 0x00
+#define OPENDOOR 0x03
+#define CHANGEPASS 0x04
+#define LOCKSYSTEM 0x05
+#define NO_PEOPLE 0x06
+
+UART_ConfigType UART_Configurations = {UART_8_BITS, UART_NO_PARITY, UART_ONE_STOP_BIT, UART_BAUD_9600};
+TWI_ConfigType TWI_Configurations = {EEPROM_ADDRESS, TWI_BIT_RATE_400KHZ};
+Timer_ConfigType Timer_Configurations = {0, 250, TIMER_timer2, F_CPU_64, MODE_normal};
+
+/*------------------------------------------------------------------------------
+ *  				Global Variables and Function Declarations
+ *----------------------------------------------------------------------------*/
+
+static uint8 g_flag = 0;
+static uint32 g_tick = 0;
+static uint8 Pass[5];
+
+static uint8 EEPROM_val;
+static uint8 fail_counter = 0;
+/*
+ * Status variable to exit or stay in loop
+ */
+static uint8 status = 1;
+
+void recievePass(void);
+
+void openDoor();
+
+uint8 comparePasswords(uint8 *Ptr, uint8 *RPtr);
+
+
+/* This is the call-back functions */
+void motorTime(void)
+{
+	g_tick++;
+	if(g_tick == 7324){
+		g_flag = 1;
+		g_tick = 0;
+	}
+}
+
+void lockSystemTime(void)
+{
+	g_tick++;
+	if(g_tick == 29296){
+		g_flag = 1;
+		g_tick = 0;
+	}
+}
+
+void lockSystem();
+
+uint8 firstPass(void);
+
+/*------------------------------------------------------------------------------
+ *  						Application Code
+ *----------------------------------------------------------------------------*/
+int main() {
+
+	SREG = 1 << 7;
+
+	UART_init(&UART_Configurations);
+	BUZZER_init();
+	TWI_init(&TWI_Configurations);
+	LCD_init();
+	DcMotor_Init();
+	PIR_init();
+
+	for(;;)
+	{
+		/*
+		 * If status is one, meaning the passwords are matching, send to the other MC that there is no need to repeat
+		 * the process and we can move on to the main system
+		 */
+		if(firstPass())
+		{
+//			for(uint8 i = 0; i < 5; i++)
+//			{
+//				EEPROM_writeByte(0x00+i,Pass[i]);
+//			}
+			UART_sendByte(READY);
+			_delay_ms(50);
+			UART_sendByte(NO_REPEAT);
+			break;
+		}
+		else
+		{
+			UART_sendByte(READY);
+			_delay_ms(50);
+			UART_sendByte(REPEAT);
+		}
+	}
+
+	for(;;)
+	{
+		if(UART_recieveByte() == OPENDOOR)
+		{
+			for(fail_counter = 0; fail_counter < 3; fail_counter++)
+			{
+				recievePass();
+				for(uint8 i = 0; i < 5; i++)
+				{
+					EEPROM_readByte(EEPROM_ADDRESS+i, &EEPROM_val);
+					_delay_ms(50);
+					if(comparePasswords(Pass[i], EEPROM_val))
+					{
+						/*
+						 * Break the loop since the bytes don't match and reset
+						 */
+						status = 0;
+						break;
+					}
+					else
+					{
+						status = 1;
+					}
+				}
+
+				if(status)
+				{
+					UART_sendByte(READY);
+					_delay_ms(50);
+					UART_sendByte(NO_REPEAT);
+					break;
+				}
+				else
+				{
+					UART_sendByte(READY);
+					_delay_ms(50);
+					UART_sendByte(REPEAT);
+				}
+			}
+
+			if(fail_counter == 3)
+			{
+				lockSystem();
+			}
+			else
+			{
+				openDoor();
+			}
+		}
+
+		else if(UART_recieveByte() == OPENDOOR)
+		{
+			for(fail_counter = 0; fail_counter < 3; fail_counter++)
+			{
+				recievePass();
+				for(uint8 i = 0; i < 5; i++)
+				{
+					EEPROM_readByte(EEPROM_ADDRESS+i, &EEPROM_val);
+					_delay_ms(50);
+					if(comparePasswords(Pass[i], EEPROM_val))
+					{
+						/*
+						 * Break the loop since the bytes don't match and reset
+						 */
+						status = 0;
+						break;
+					}
+					else
+					{
+						status = 1;
+					}
+				}
+
+				if(status)
+				{
+					UART_sendByte(READY);
+					_delay_ms(50);
+					UART_sendByte(NO_REPEAT);
+					break;
+				}
+				else
+				{
+					UART_sendByte(READY);
+					_delay_ms(50);
+					UART_sendByte(REPEAT);
+				}
+			}
+
+			if(fail_counter == 3)
+			{
+				lockSystem();
+			}
+			else
+			{
+				openDoor();
+			}
+		}
+}
+
+
+
+/*------------------------------------------------------------------------------
+ *  							Function Definitions
+ *----------------------------------------------------------------------------*/
+
+uint8 comparePasswords(uint8 *Ptr, uint8 *RPtr)
+{
+	if(Ptr != RPtr)
+	{ // Passwords do not match
+		return 1;
+	}
+	return 0;  // Passwords match
+}
+
+void recievePass(){
+	/*
+	 * Wait for the other MC to be ready
+	 */
+	while(UART_recieveByte() != READY);
+
+	for(uint8 i = 0; i < 5; i++)
+	{
+		_delay_ms(50);
+		Pass[i] = UART_recieveByte();
+		// Receive the password
+	}
+}
+
+void openDoor()
+{
+	Timer_setCallBack(motorTime, TIMER_timer2);
+	Timer_init(&Timer_Configurations);
+	g_tick = 0;
+	g_flag = 0;
+
+	DcMotor_Rotate(CW, 255);
+	while(!g_flag);
+	DcMotor_Rotate(STOP, 255);
+
+	while(PIR_getValue())
+
+	UART_sendByte(READY);
+
+	UART_sendByte(NO_PEOPLE);
+
+	g_flag = 0;
+	g_tick = 0;
+
+	DcMotor_Rotate(ACW, 255);
+	while(!g_flag);
+	DcMotor_Rotate(STOP, 255);
+	Timer_deinit(TIMER_timer2);
+}
+
+void lockSystem()
+{
+	BUZZER_on();
+	Timer_setCallBack(lockSystemTime, TIMER_timer2);
+	Timer_init(&Timer_Configurations);
+
+	g_flag = 0;
+	g_tick = 0;
+
+	while(!g_flag);
+
+	while(UART_recieveByte() != READY);
+
+	Timer_deinit(TIMER_timer2);
+	BUZZER_off();
+}
+
+uint8 firstPass(void)
+{
+	recievePass();
+
+	/*
+	 * This following block of code is to receive and write the password in the eeprom
+	 * if incorrect, the for loop is exited and the process is reset
+	 */
+	while(UART_recieveByte() != READY);
+
+	for(uint8 i = 0; i < 5; i++)
+	{
+		_delay_ms(50);
+		if(comparePasswords(Pass[i], UART_recieveByte()))
+		{
+			/*
+			 * Break the loop since the bytes don't match and reset
+			 */
+			status = 0;
+			return status;
+		}
+		else
+		{
+			status = 1;
+			EEPROM_writeByte(0x00+i,Pass[i]);
+		}
+	}
+	return status;
+}

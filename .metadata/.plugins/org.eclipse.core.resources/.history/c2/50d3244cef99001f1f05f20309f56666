@@ -1,0 +1,82 @@
+/*------------------------------------------------------------------------------
+ *  Module      : Application Driver
+ *  File        : main.c
+ *  Description : Source file for the Application code
+ *  Author      : Yousef Tantawy
+ *----------------------------------------------------------------------------*/
+
+#include "buzzer.h"
+#include "std_types.h"
+#include "common_macros.h"
+#include "external_eeprom.h"
+#include "gpio.h"
+#include "motor.h"
+#include "pir.h"
+#include "pwm.h"
+#include "timer.h"
+#include "twi.h"
+#include "uart.h"
+#include "avr/io.h"
+#include "util/delay.h"
+#include <stdio.h>
+
+#define READY 0x01
+#define REPEAT 0x02
+#define NO_REPEAT 0x00
+
+uint8 comparePasswords(uint8 *Ptr, uint8 *RPtr);
+
+int main() {
+	UART_ConfigType UART_Configurations = {UART_8_BITS, UART_NO_PARITY, UART_ONE_STOP_BIT, UART_BAUD_9600};
+	TWI_ConfigType TWI_Configurations = {EEPROM_ADDRESS, TWI_BIT_RATE_400KHZ};
+
+	uint8 Pass[5];
+
+	SREG = 1 << 7;
+
+	UART_init(&UART_Configurations);
+	BUZZER_init();
+
+	for(;;)
+	{
+		while(UART_recieveByte() != READY);
+
+		for(uint8 i = 0; i < 5; i++)
+		{
+			_delay_ms(50);
+			Pass[i] = UART_recieveByte();
+			// Receive the original password
+		}
+
+		while(UART_recieveByte() != READY);
+
+		for(uint8 i = 0; i < 5; i++)
+		{
+			_delay_ms(50);
+			if(comparePasswords(Pass[i], UART_recieveByte()))
+			{
+				UART_sendByte(READY);
+				_delay_ms(50);
+				UART_sendByte(REPEAT);
+			}
+		}
+
+		for(uint8 i = 0; i < 5; i++)
+		{
+			EEPROM_writeByte(0x0+i,Pass[i]);
+		}
+
+		UART_sendByte(READY);
+		_delay_ms(50);
+		UART_sendByte(NO_REPEAT);
+	}
+}
+
+uint8 comparePasswords(uint8 *Ptr, uint8 *RPtr)
+{
+	if(Ptr != RPtr)
+	{ // Passwords do not match
+		return 1;
+	}
+	return 0;  // Passwords match
+}
